@@ -11,17 +11,18 @@ const SPEED = 3;
 const PROJECTILE_SPEED = 3.5;
 const ROTATIONAL_SPEED = 0.05;
 const FRICTION = 0.995;
-const POSSIBLE_SIDES = 4;
-const HIT_DAMAGE = 20;
+const HIT_DAMAGE = 10;
 
-const projectiles = [];
 const asteroids = [];
+const particles = [];
+const projectiles = [];
 let isPaused = false;
 let isGameOver = false;
 let animationId = null;
 let player = null;
 let playerPoints = 0;
 let lives = 3;
+let enemiesTimer = 2500;
 
 const MESSAGE_POINTS = "points";
 
@@ -53,7 +54,7 @@ const keys = {
 };
 
 function updateBackground() {
-  context.fillStyle = "black";
+  context.fillStyle = `rgba(0, 0, 0, ${isGameOver ? 0.1 : 0.18})`;
   context.fillRect(0, 0, canvas.width, canvas.height);
 }
 
@@ -77,18 +78,52 @@ function renderText({
   context.closePath();
 }
 
+class Particle {
+  constructor({ position, velocity, radius = 3 }) {
+    this.position = position;
+    this.velocity = velocity;
+    this.radius = radius;
+    this.alpha = 1.0;
+    this.friction = FRICTION;
+  }
+
+  draw() {
+    context.save();
+    context.globalAlpha = this.alpha;
+    context.beginPath();
+    context.arc(
+      this.position.x,
+      this.position.y,
+      this.radius,
+      0,
+      Math.PI * 2,
+      false
+    );
+    context.fillStyle = "white";
+    context.fill();
+    context.closePath();
+    context.restore();
+  }
+
+  update() {
+    this.draw();
+    // Reduce velocity over time
+    this.velocity.x *= this.friction;
+    this.velocity.y *= this.friction;
+
+    this.position.x += this.velocity.x;
+    this.position.y += this.velocity.y;
+    this.alpha -= 0.01;
+  }
+}
+
 class Asteroid {
   constructor({ position, velocity, radius, damage = 0 }) {
     this.position = position;
     this.velocity = velocity;
     this.radius = radius;
     this.damage = damage;
-
-    if (this.radius > HIT_DAMAGE) {
-      console.log("Bigger", this.radius, " / ", this.damage);
-    } else {
-      console.warn("SMALLER", this.radius, " / ", this.damage);
-    }
+    this.realSize = radius;
   }
 
   setDamage() {
@@ -100,32 +135,29 @@ class Asteroid {
   }
 
   draw() {
+    this.realSize = this.radius - this.damage;
     const percent = 100 - Math.floor((this.damage / this.radius) * 100);
 
     let color = "white";
+    const minSize = HIT_DAMAGE * 2;
 
-    if (percent < 50) {
-      color = "red";
-    } else if (percent < 70) {
-      color = "yellow";
-    }
-
-    // context.save();
     context.beginPath();
     context.arc(
       this.position.x,
       this.position.y,
-      this.radius,
+      this.realSize < minSize ? HIT_DAMAGE : this.realSize,
       0,
       Math.PI * 2,
       false
     );
+    context.closePath();
     context.strokeStyle = color;
     context.stroke();
-    context.closePath();
+    context.fillStyle = "black";
+    context.fill();
 
     // Add % for big asteroids
-    if (this.radius > HIT_DAMAGE) {
+    if (this.realSize > minSize + 20) {
       renderCenteredText({
         text: 100 - Math.floor((this.damage / this.radius) * 100) + "%",
         x: this.position.x,
@@ -140,7 +172,6 @@ class Asteroid {
     this.draw();
     this.position.x += this.velocity.x;
     this.position.y += this.velocity.y;
-    // console.log("Asteroid pos", this.position.x, this.position.y);
   }
 }
 
@@ -148,7 +179,7 @@ class Projectile {
   constructor({ position, velocity }) {
     this.position = position;
     this.velocity = velocity;
-    this.radius = 5;
+    this.radius = 3;
   }
 
   draw() {
@@ -170,7 +201,6 @@ class Projectile {
     this.draw();
     this.position.x += this.velocity.x;
     this.position.y += this.velocity.y;
-    // console.log("projectile pos", this.position.x, this.position.y);
   }
 }
 
@@ -190,7 +220,7 @@ class Player {
     context.beginPath();
     context.arc(this.position.x, this.position.y, 5, 0, Math.PI * 2, false);
     context.closePath();
-    context.fillStyle = "red";
+    context.fillStyle = "white";
     context.fill();
 
     context.beginPath();
@@ -271,7 +301,7 @@ function circleTriangleCollision(circle, triangle) {
 
     let distance = Math.sqrt(dx * dx + dy * dy);
 
-    if (distance <= circle.radius) {
+    if (distance <= circle.realSize) {
       return true;
     }
   }
@@ -316,12 +346,14 @@ window.addEventListener("keydown", (e) => {
       keys.p.pressed = !keys.p.pressed;
       break;
     case "Enter":
-      window.cancelAnimationFrame(animationId);
-      isPaused = false;
-      isGameOver = false;
-      startGame();
+      if (isGameOver) {
+        window.cancelAnimationFrame(animationId);
+        newGame();
+      }
       break;
     case "Space":
+      if (isGameOver) return;
+
       projectiles.push(
         new Projectile({
           position: {
@@ -361,48 +393,23 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
-function addAsteroid() {
-  const minHeight = canvas.height * 0.1;
-  const maxHeight = canvas.height * 0.9;
-
-  const side = Math.floor(Math.random() * POSSIBLE_SIDES);
+function addAsteroid(maxRadius = 70, minRadius = 30) {
   const xRand = Math.random() * canvas.width;
-  const yRand = Math.random() * (maxHeight - minHeight) + minHeight;
-  const radius = 50 * Math.random() + 10;
+  const yRand = Math.random() * canvas.height;
+  const radius = Math.random() * (maxRadius - minRadius) + minRadius;
   let x, y, vx, vy;
 
-  const randSecondaryVelocity = Math.random() * (0.9 - -0.5) + -0.5;
-
-  switch (side) {
-    case 0: // left
-      x = side - radius;
-      y = yRand;
-      vx = 1;
-      vy = randSecondaryVelocity;
-      break;
-
-    case 1: // bottom
-      x = xRand;
-      y = canvas.height + radius;
-      vx = randSecondaryVelocity;
-      vy = -1;
-      break;
-
-    case 2: // right
-      x = canvas.width + radius;
-      y = yRand;
-      vx = -1;
-      vy = randSecondaryVelocity;
-      break;
-
-    case 3: // top
-    default:
-      x = xRand;
-      y = 0 - radius;
-      vx = randSecondaryVelocity;
-      vy = 1;
-      break;
+  if (Math.random() < 0.5) {
+    x = Math.random() < 0.5 ? 0 - radius : canvas.width + radius;
+    y = yRand;
+  } else {
+    x = xRand;
+    y = Math.random() < 0.5 ? 0 - radius : canvas.height + radius;
   }
+
+  const angle = Math.atan2(centerY - y, centerX - x);
+  vx = Math.cos(angle);
+  vy = Math.sin(angle);
 
   asteroids.push(
     new Asteroid({
@@ -425,20 +432,34 @@ const asteroidsAnimationId = window.setInterval(() => {
   }
 
   addAsteroid();
-}, 1200);
+}, enemiesTimer);
 
-function circleCollision(item1, item2) {
-  const xDiff = item2.position.x - item1.position.x;
-  const yDiff = item2.position.y - item1.position.y;
+function circleCollision(projectile, enemy) {
+  // @see https://chriscourses.com/courses/javascript-games/videos/detect-collision-on-enemy-and-projectile-hit
+  const dist = Math.hypot(
+    projectile.position.x - enemy.position.x,
+    projectile.position.y - enemy.position.y
+  );
 
-  const distance = Math.sqrt(xDiff * xDiff + yDiff * yDiff);
-
-  if (distance <= item1.radius + item2.radius) {
-    console.log("Colision");
+  if (dist - enemy.radius - projectile.radius < 1) {
     return true;
   }
 
   return false;
+}
+
+function drawParticles() {
+  if (particles.length > 0) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const particle = particles[i];
+
+      if (particle.alpha <= 0) {
+        particles.splice(i, 1);
+      } else {
+        particle.update();
+      }
+    }
+  }
 }
 
 function drawProjectiles() {
@@ -460,14 +481,35 @@ function drawProjectiles() {
   }
 }
 
+function makeExplosion(elements, x, y, maxRadius = 3) {
+  for (let index = 0; index < elements; index++) {
+    particles.push(
+      new Particle({
+        position: { x, y },
+        velocity: {
+          x: (Math.random() - 0.5) * Math.random() * 8,
+          y: (Math.random() - 0.5) * Math.random() * 6,
+        },
+        radius: Math.random() * maxRadius,
+      })
+    );
+  }
+}
+
 function drawAsteroids() {
   if (asteroids.length > 0) {
     for (let i = asteroids.length - 1; i >= 0; i--) {
       const asteroid = asteroids[i];
       asteroid.update();
 
-      if (circleTriangleCollision(asteroid, player.getVertices())) {
-        isGameOver = true;
+      if (
+        !isGameOver &&
+        circleTriangleCollision(asteroid, player.getVertices())
+      ) {
+        makeExplosion(8, player.position.x, player.position.y, 5);
+        setTimeout(() => {
+          isGameOver = true;
+        }, 400);
         return;
       }
 
@@ -476,7 +518,7 @@ function drawAsteroids() {
         asteroid.position.x + asteroid.radius < 0 ||
         asteroid.position.x - asteroid.radius > canvas.width ||
         asteroid.position.y - asteroid.radius > canvas.height ||
-        asteroid.position.y + asteroid.radiusd < 0
+        asteroid.position.y + asteroid.radius < 0
       ) {
         asteroids.splice(i, 1);
       }
@@ -484,10 +526,17 @@ function drawAsteroids() {
       // Hits
       for (let j = projectiles.length - 1; j >= 0; j--) {
         const projectile = projectiles[j];
+
         if (circleCollision(projectile, asteroid)) {
-          //   asteroids.splice(i, 1);
           // remove projectile
           projectiles.splice(j, 1);
+
+          makeExplosion(8, projectile.position.x, projectile.position.y);
+
+          // animate shrink
+          gsap.to(asteroid, {
+            radius: asteroid.radius - HIT_DAMAGE,
+          });
 
           asteroid.setDamage();
 
@@ -579,11 +628,9 @@ function animate() {
     return;
   }
 
-  handlePlayerControls();
-
-  if (isGameOver) {
-    drawGameOver();
-    return;
+  if (!isGameOver) {
+    handlePlayerControls();
+    player.update();
   }
 
   updateBackground();
@@ -591,43 +638,41 @@ function animate() {
   renderCenteredText({
     text: "Controls: A: Turn left / D: Turn right / W: Move Forward / SPACE: Shot / P: Pause",
     font: "15px Verdana",
-    x: centerX, 
+    x: centerX,
     y: canvas.height - 50,
-  })
+  });
 
-  player.update();
+  drawParticles();
 
   // Projectiles management
   drawProjectiles();
 
   // Asteroids management
   drawAsteroids();
+
+  if (isGameOver) {
+    drawGameOver();
+  }
 }
 
-function startGame() {
+function newGame() {
   player = new Player({
     position: { x: centerX, y: centerY },
     velocity: { x: 0, y: 0 },
   });
 
   playerPoints = 0;
+  isPaused = false;
+  isGameOver = false;
 
   projectiles.splice(0, projectiles.length - 1);
+  projectiles.length = 0;
+
   asteroids.splice(0, asteroids.length - 1);
+  asteroids.length = 0;
 
   addAsteroid();
-
-  setTimeout(() => {
-    addAsteroid();
-  }, 50);
-
-  setTimeout(() => {
-    addAsteroid();
-  }, 150);
-
-  setTimeout(() => {
-    addAsteroid();
-  }, 250);
+  addAsteroid();
 
   animate();
 }
@@ -640,4 +685,4 @@ window.onfocus = function (e) {
   isPaused = false;
 };
 
-startGame();
+newGame();
