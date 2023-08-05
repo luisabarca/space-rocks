@@ -155,17 +155,6 @@ class Asteroid {
     context.stroke();
     context.fillStyle = "black";
     context.fill();
-
-    // Add % for big asteroids
-    if (this.realSize > minSize + 20) {
-      renderCenteredText({
-        text: 100 - Math.floor((this.damage / this.radius) * 100) + "%",
-        x: this.position.x,
-        y: this.position.y,
-        font: "12px Verdana",
-        color,
-      });
-    }
   }
 
   update() {
